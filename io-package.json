@@ -1,8 +1,21 @@
 {
   "common": {
     "name": "awekas-connector",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "news": {
+      "0.2.0": {
+        "en": "requires js-controller >= 6.0.11, admin >= 7.6.17 and Node.js >= 22\ndevelopment tooling updated (shared ioBroker ESLint config, release-script 5, testing 6), tests now also on Node.js 26",
+        "de": "benötigt js-controller >= 6.0.11, admin >= 7.6.17 und Node.js >= 22\nEntwicklungstools aktualisiert (shared ioBroker ESLint config, Release-Script 5, Test 6), jetzt auch auf Node.js 26",
+        "ru": "требуется js-контроллер >= 6.0.11, администратор >= 7.6.17 и Node.js >= 22\nобновлены инструменты разработки (общая конфигурация IOBroker ESLint, сценарий выпуска 5, тестирование 6), теперь тестируется и на Node.js 26",
+        "pt": "requer js-controller >= 6.0.1, admin >= 7.6.17 e Node.js >= 22\nferramenta de desenvolvimento atualizada (IOBroker ESLint, script 5, teste 6), testes agora também em Node.js 26",
+        "nl": "vereist js-controller >= 6.0.11, admin >= 7.6.17 en Node.js >= 22\nontwikkeltools bijgewerkt (gedeelde IOBroker ESLint-configuratie, release-script 5, testen 6), tests nu ook op Node.js 26",
+        "fr": "nécessite js-controller >= 6.0.11, admin >= 7.6.17 et Node.js >= 22\noutils de développement mis à jour (configuration partagée d'IObroker ESLint, script 5, tests 6), tests sur Node.js 26",
+        "it": "richiede js-controller >= 6.0.11, admin >= 7.6.17 e Node.js >= 22\ntool di sviluppo aggiornato (config IObroker ESLint condiviso, release-script 5, test 6), test ora anche su Node.js 26",
+        "es": "requiere js-controller >= 6.0.11, admin >= 7.6.17 y Node.js >= 22\nherramientas de desarrollo actualizadas (configuración compartida de IOBroker ESLint, versión 5, prueba 6), ahora también en Node.js 26",
+        "pl": "wymaga kontrolera js->= 6.0.11, admin >= 7.6.17 i Node.js >= 22\naktualizacja narzędzi programistycznych (współdzielona konfiguracja iOBroker eSlint, release-script 5, testing 6), testy teraz również na Node.js 26",
+        "uk": "потрібен js-контролер >= 6.0.11, адміністратор> = 7.6.17 і Node.js >= 22\nоновлено інструменти розробки (спільна конфігурація ESLint IObroker, сценарій випуску 5, тестування 6), тести тепер також на Node.js 26",
+        "zh-cn": "需要 js-controller >= 6.0.11、管理员 >= 7.6.17 和 Node.js >= 22\n开发工具已更新（共享的 ioBroker ESLint 配置、发布脚本 5、测试 6），现在也在 Node.js 26 上进行了测试"
+      },
       "0.1.1": {
         "en": "translations of the settings page for Portuguese, Russian, Ukrainian and Chinese\nreleases are now published via npm trusted publishing (no npm token)",
         "de": "Übersetzungen der Einstellungsseite für Portugiesisch, Russisch, Ukrainisch und Chinesisch\nReleases werden jetzt über npm Trusted Publishing veröffentlicht (kein npm-Token)",

@@ -55,7 +55,7 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-### **WORK IN PROGRESS**
+### 0.2.0 (2026-11-22)
 
 - (awekas) requires js-controller >= 6.0.11, admin >= 7.6.17 and Node.js >= 22
 - (awekas) development tooling updated (shared ioBroker ESLint config, release-script 5, testing 6), tests now also on Node.js 26
@@ -76,6 +76,12 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 - (awekas) states structured in channels `info`, `current`, `day`, `forecast.dayN`, `station` with proper roles
 - (awekas) new: station data from station.php (once a day), value lists for condition and pressure tendency, Polish language
 - (awekas) requires js-controller >= 5.0.19, admin >= 6.17.14, Node.js >= 20
+
+### 0.0.4 (2.9.2023)
+
+- change adapter name
+- changed to async object write
+- changed main structure
 
 Older changes: [CHANGELOG_OLD.md](CHANGELOG_OLD.md)
 
