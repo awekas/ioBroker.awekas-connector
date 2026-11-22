@@ -40,7 +40,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        node-version: [20.x, 22.x, 24.x]
+        # Node 20 is end-of-life; the dev tooling (mocha 12) requires Node 22+
+        node-version: [22.x, 24.x]
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
