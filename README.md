@@ -55,7 +55,7 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-### **WORK IN PROGRESS**
+### 0.1.1 (2026-11-22)
 
 - (awekas) translations of the settings page for Portuguese, Russian, Ukrainian and Chinese
 - (awekas) releases are now published via npm trusted publishing (no npm token)

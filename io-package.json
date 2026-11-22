@@ -1,8 +1,21 @@
 {
   "common": {
     "name": "awekas-connector",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "news": {
+      "0.1.1": {
+        "en": "translations of the settings page for Portuguese, Russian, Ukrainian and Chinese\nreleases are now published via npm trusted publishing (no npm token)",
+        "de": "Übersetzungen der Einstellungsseite für Portugiesisch, Russisch, Ukrainisch und Chinesisch\nReleases werden jetzt über npm Trusted Publishing veröffentlicht (kein npm-Token)",
+        "ru": "переводы страницы настроек для португальского, русского, украинского и китайского языков\nрелизы теперь публикуются через npm trusted publishing (без токена npm)",
+        "pt": "traduções da página de ajustes para português, russo, ucraniano e chinês\nas versões agora são publicadas via npm trusted (sem token npm)",
+        "nl": "vertalingen van de instellingenpagina voor Portugees, Russisch, Oekraïens en Chinees\nreleases worden nu gepubliceerd via npm trusted publishing (geen npm-token)",
+        "fr": "traductions de la page des paramètres en portugais, russe, ukrainien et chinois\nles sorties sont désormais publiées via npm trusted publishing (pas de jeton npm)",
+        "it": "traduzioni della pagina impostazioni per portoghese, russo, ucraino e cinese\nle release sono ora pubblicate tramite npm trusted (no token npm)",
+        "es": "traducciones de la página de ajustes al portugués, ruso, ucraniano y chino\nlos lanzamientos ahora se publican en npm Trusted Publishing (sin npm token)",
+        "pl": "tłumaczenia strony ustawień na język portugalski, rosyjski, ukraiński i chiński\nwydania są teraz publikowane za pośrednictwem zaufanego publikowania npm (bez tokena npm)",
+        "uk": "переклади сторінки налаштувань португальською, російською, українською та китайською мовами\nвипуски тепер публікуються через надійну публікацію npm (без токена npm)",
+        "zh-cn": "葡萄牙语、俄语、乌克兰语和中文设置页面的翻译\n版本现在通过 npm 可信发布发布（没有 npm 令牌）"
+      },
       "0.1.0": {
         "en": "Complete rework: adapter starts correctly, encrypted API key, configurable interval, load protection for the AWEKAS API, structured states",
         "de": "Komplette Überarbeitung: Adapter startet korrekt, verschlüsselter API-Key, einstellbares Intervall, Lastschutz für die AWEKAS-API, strukturierte Datenpunkte"
