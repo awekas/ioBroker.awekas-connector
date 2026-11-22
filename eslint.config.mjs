@@ -13,6 +13,10 @@ export default [
         // as this improves maintainability. jsdoc warnings will not block build process.
         rules: {
             // 'jsdoc/require-jsdoc': 'off',
+            // This adapter is plain JavaScript: JSDoc @type/@typedef are needed for type checking (tsc --checkJs)
+            // and must not be removed as "redundant".
+            'jsdoc/check-tag-names': ['warn', { typed: false }],
+            'jsdoc/no-types': 'off',
         },
     },
 ];
