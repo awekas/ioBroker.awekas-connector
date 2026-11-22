@@ -81,9 +81,11 @@ class AwekasConnector extends utils.Adapter {
 		});
 		/** @type {ioBroker.Timeout | undefined} */
 		this.pollTimer = undefined;
-		this.language = "en";
+		this.apiLanguage = "en";
 		this.intervalMs = DEFAULT_INTERVAL_S * 1000;
 		this.backoffMs = 0;
+		/** @type {string} */
+		this.token = "";
 		this.stopped = false;
 		this.lastLoggedError = "";
 		this.lastStationFetch = 0;
@@ -112,6 +114,7 @@ class AwekasConnector extends utils.Adapter {
 			this.log.error("The configured AWEKAS API key has an invalid format. Please check the adapter settings.");
 			return;
 		}
+		/** @type {string} */
 		this.token = token;
 
 		let interval = Number(this.config.interval) || DEFAULT_INTERVAL_S;
@@ -121,13 +124,13 @@ class AwekasConnector extends utils.Adapter {
 		}
 		this.intervalMs = Math.min(interval, MAX_INTERVAL_S) * 1000;
 
-		this.language = await this.detectLanguage();
+		this.apiLanguage = await this.detectLanguage();
 
 		await this.createObjects();
 
 		// random start delay (5 s up to one interval) spreads restarts of many installations
 		const startDelay = 5000 + Math.floor(Math.random() * Math.max(0, this.intervalMs - 5000));
-		this.log.info(`AWEKAS connector started (interval ${this.intervalMs / 1000}s, language ${this.language}).`);
+		this.log.info(`AWEKAS connector started (interval ${this.intervalMs / 1000}s, language ${this.apiLanguage}).`);
 		this.log.debug(`First request in ${Math.round(startDelay / 1000)}s`);
 		this.schedule(startDelay);
 	}
@@ -291,7 +294,7 @@ class AwekasConnector extends utils.Adapter {
 	 */
 	async fetchData(endpoint = "current") {
 		let url = `${API_BASE}${ENDPOINTS[endpoint]}?key=${encodeURIComponent(this.token)}`;
-		if (endpoint === "current") url += `&lng=${this.language}`;
+		if (endpoint === "current") url += `&lng=${this.apiLanguage}`;
 		const res = await fetch(url, {
 			method: "GET",
 			redirect: "error",
@@ -333,7 +336,7 @@ class AwekasConnector extends utils.Adapter {
 			if (def.endpoint !== endpoint || def.id === "info.error") continue;
 			let val;
 			if (def.windText) {
-				const deg = this.normalize(getPath(data, def.windText), "number");
+				const deg = /** @type {number | null | undefined} */ (this.normalize(getPath(data, def.windText), "number"));
 				if (deg === undefined) continue;
 				val = deg === null ? null : this.windText(deg);
 			} else if (def.path) {
@@ -378,7 +381,7 @@ class AwekasConnector extends utils.Adapter {
 	/** @param {number} deg */
 	windText(deg) {
 		if (deg < 0 || deg > 360) return null;
-		const list = WIND_TEXT[this.language] || WIND_TEXT.en;
+		const list = WIND_TEXT[this.apiLanguage] || WIND_TEXT.en;
 		return list[Math.round(deg / 22.5) % 16];
 	}
 }
