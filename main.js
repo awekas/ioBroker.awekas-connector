@@ -255,8 +255,7 @@ class AwekasConnector extends utils.Adapter {
 		this.lastStationFetch = Date.now();
 		try {
 			// AWEKAS allows max. 2 requests per second
-			if (typeof this.delay === "function") await this.delay(1500);
-			else await sleep(1500);
+			await this.delay(1500);
 			if (this.stopped) return;
 			const data = await this.fetchData("station");
 			if (data.error) {
@@ -395,11 +394,6 @@ class HttpError extends Error {
 		super(message);
 		this.retryAfterMs = retryAfterMs;
 	}
-}
-
-/** @param {number} ms */
-function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

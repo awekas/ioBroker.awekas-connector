@@ -3,20 +3,26 @@ updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
-      interval: monthly
-      time: "04:00"
-      timezone: Europe/Berlin
-    open-pull-requests-limit: 5
+      interval: cron
+      cronjob: "33 4 28 * *"
+      timezone: Europe/Vienna
+    open-pull-requests-limit: 15
     assignees:
       - awekas
     versioning-strategy: increase
+    cooldown:
+      default-days: 7
+    ignore:
+      # @types/node must match the minimum supported node.js version
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: monthly
-      time: "04:00"
-      timezone: Europe/Berlin
-    open-pull-requests-limit: 5
+      interval: cron
+      cronjob: "24 11 11 * *"
+      timezone: Europe/Vienna
+    open-pull-requests-limit: 15
     assignees:
       - awekas
