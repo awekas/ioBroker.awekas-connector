@@ -1,8 +1,12 @@
 {
   "common": {
     "name": "awekas-connector",
-    "version": "0.0.4",
+    "version": "0.1.0",
     "news": {
+      "0.1.0": {
+        "en": "Complete rework: adapter starts correctly, encrypted API key, configurable interval, load protection for the AWEKAS API, structured states",
+        "de": "Komplette Überarbeitung: Adapter startet korrekt, verschlüsselter API-Key, einstellbares Intervall, Lastschutz für die AWEKAS-API, strukturierte Datenpunkte"
+      },
       "0.0.4": {
         "en": "initial release",
         "de": "Erstveröffentlichung",
@@ -20,7 +24,7 @@
     "title": "AWEKAS weather connector",
     "titleLang": {
       "en": "AWEKAS weather connector",
-      "de": "AWEKAS Datenadapter",
+      "de": "AWEKAS Wetterdaten-Connector",
       "ru": "погодный разъем AWEKAS",
       "pt": "Conector meteorológico AWEKAS",
       "nl": "AWEKAS weerconnector",
@@ -44,9 +48,15 @@
       "uk": "отримати дані про погоду з метеостанції AWEKAS",
       "zh-cn": "从 AWEKAS 气象站获取天气数据"
     },
-    "authors": ["awekas <mail@awekas.at>"],
-    "keywords": ["awekas", "weather", "weather data", "weather station"],
-    "license": "MIT",
+    "authors": [
+      "AWEKAS GmbH <mail@awekas.at>"
+    ],
+    "keywords": [
+      "awekas",
+      "weather",
+      "weather data",
+      "weather station"
+    ],
     "platform": "Javascript/Node.js",
     "main": "main.js",
     "icon": "awekas-weather-connector.png",
@@ -64,19 +74,54 @@
     },
     "dependencies": [
       {
-        "js-controller": ">=3.3.22"
+        "js-controller": ">=5.0.19"
       }
     ],
     "globalDependencies": [
       {
-        "admin": ">=5.1.13"
+        "admin": ">=6.17.14"
       }
-    ]
+    ],
+    "tier": 3,
+    "licenseInformation": {
+      "license": "MIT",
+      "type": "free"
+    },
+    "messagebox": false
   },
   "native": {
-    "option1": true,
-    "option2": "42"
+    "token": "",
+    "interval": 60,
+    "language": ""
   },
   "objects": [],
-  "instanceObjects": []
+  "instanceObjects": [
+    {
+      "_id": "info",
+      "type": "channel",
+      "common": {
+        "name": "Information"
+      },
+      "native": {}
+    },
+    {
+      "_id": "info.connection",
+      "type": "state",
+      "common": {
+        "role": "indicator.connected",
+        "name": "Connected to AWEKAS API",
+        "type": "boolean",
+        "read": true,
+        "write": false,
+        "def": false
+      },
+      "native": {}
+    }
+  ],
+  "encryptedNative": [
+    "token"
+  ],
+  "protectedNative": [
+    "token"
+  ]
 }

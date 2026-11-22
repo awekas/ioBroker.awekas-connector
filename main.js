@@ -1,2361 +1,433 @@
-/*
 /**
  *
  *      ioBroker AWEKAS weather data connector
  *
- *      (c) 2023 AWEKAS Gmbh
+ *      (c) 2023-2026 AWEKAS GmbH
  *      MIT License
- *      Versio  0.0.4
  *
- *  The adapter provides the ability to query live weather data and a forecast from an AWEKAS weather station. 
- *  To do this, the AWEKAS API key, which can be found on the website https://my.awekas.at in the Additional section, must be entered. 
- *  Please note the information on the AWEKAS Stations API at:
- *  https://www.awekas.at/for2/index.php?thread/17080-software-api-stations-api-beschreibung/
+ *  Reads live weather data and a forecast of the user's own AWEKAS weather station
+ *  through the AWEKAS Stations API V2.1 (current.php every interval, station.php once a day).
+ *  The AWEKAS API key can be found at https://my.awekas.at (requires AWEKAS Plus).
+ *
+ *  Protection of the AWEKAS servers:
+ *   - one request at a time, never overlapping (setTimeout chain, no setInterval)
+ *   - enforced minimum interval, random start delay and jitter so that installations
+ *     do not hit the API at the same second
+ *   - exponential back-off on network/server errors, Retry-After is honoured
+ *   - polling stops completely on permanent errors (invalid key, AWEKAS Plus not active)
+ *     until the configuration is changed (which restarts the instance)
+ *   - fixed HTTPS endpoint, no redirects, request timeout, response size limit
+ *   - identifying User-Agent so AWEKAS can see which client generates traffic
+ *
+ *  Protection of the user:
+ *   - API key is stored encrypted (encryptedNative / protectedNative)
+ *   - API key and request URL are never written to the log
+ *   - no third-party HTTP library (uses Node's built-in fetch)
  */
 
 "use strict";
 
 const utils = require("@iobroker/adapter-core");
-const axios = require("axios");
+const { defs, channels } = require("./lib/states");
+const pkg = require("./package.json");
 
-let APIrequestIntervall = 30000; // Intervall to collect data in ms (30000 = 30s) - do not use value below 15000!
+const API_BASE = "https://api.awekas.at/";
+const ENDPOINTS = { current: "current.php", station: "station.php" };
+const USER_AGENT = `ioBroker.awekas-connector/${pkg.version}`;
 
-let language = null;
-let intervalID;
-let timer = APIrequestIntervall;
-class AwekasWeatherConnector extends utils.Adapter {
-  /**
-   * @param {Partial<utils.AdapterOptions>} [options={}]
-   */
-  constructor(options) {
-    super({
-      ...options,
-      name: "awekas-weather-connector",
-    });
-    this.on("ready", this.onReady.bind(this));
-    this.on("stateChange", this.onStateChange.bind(this));
-    // this.on("objectChange", this.onObjectChange.bind(this));
-    // this.on("message", this.onMessage.bind(this));
-    this.on("unload", this.onUnload.bind(this));
-  }
- 
-  onReady() {
-    let adapter = this;
+const MIN_INTERVAL_S = 60; // hard lower limit, cannot be configured below
+const DEFAULT_INTERVAL_S = 60;
+const MAX_INTERVAL_S = 3600;
+const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_RESPONSE_BYTES = 512 * 1024;
+const MAX_STRING_LENGTH = 1024;
+const JITTER = 0.1; // +/- 10 %
 
-    // initialize adapter
+const BACKOFF_START_MS = 5 * 60_000;
+const BACKOFF_MAX_MS = 60 * 60_000;
+const QUOTA_WAIT_MS = 15 * 60_000;
+const STATION_REFRESH_MS = 24 * 60 * 60_000; // station data rarely changes
 
-    adapter.log.info("AWEKAS weather connector started...");
+// AWEKAS limits (API description V2.1): 240 requests per hour, 2 requests per second.
+// With the minimum interval of 60 s the adapter uses at most 61 requests per hour.
 
-    // get language from ioBroker
-    adapter.getForeignObject("system.config", (err, systemConfig) => {
-      language = systemConfig.common.language;
-      if (
-        language != "de" &&
-        language != "en" &&
-        languega != "fr" &&
-        language != "es" &&
-        language != "nl"
-      ) {
-        language = "en";
-      }
-      return language;
-    });
+const SUPPORTED_LANGUAGES = ["de", "en", "es", "it", "fr", "nl", "pl"];
 
-    // Create ioBroker objects
-    adapter.createObject(adapter);
+const WIND_TEXT = {
+	de: ["N", "NNO", "NO", "ONO", "O", "OSO", "SO", "SSO", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"],
+	en: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"],
+	es: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"],
+	it: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"],
+	fr: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"],
+	nl: ["N", "NNO", "NO", "ONO", "O", "OZO", "ZO", "ZZO", "Z", "ZZW", "ZW", "WZW", "W", "WNW", "NW", "NNW"],
+	pl: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"],
+};
 
-    // run cyclic requests for values every 30 sek
-    adapter.setTimer(adapter);
-  }
+/** errors after which polling is stopped until the configuration changes */
+const PERMANENT_ERRORS = {
+	"invalid key": "Invalid AWEKAS API key - please copy the correct key from https://my.awekas.at",
+	"awekas plus not active":
+		"AWEKAS Plus is not active - AWEKAS Plus is required for the Stations API. Please activate it in your AWEKAS user profile.",
+};
 
-  /**
-   * Is called when adapter shuts down - callback has to be called under any circumstances!
-   * @param {() => void} callback
-   */
-  onUnload(callback) {
-    try {
-      // Here you must clear all timeouts or intervals that may still be active
-      clearInterval(intervalID);
+class AwekasConnector extends utils.Adapter {
+	/**
+	 * @param {Partial<utils.AdapterOptions>} [options]
+	 */
+	constructor(options = {}) {
+		super({
+			...options,
+			name: "awekas-connector",
+		});
+		/** @type {ioBroker.Timeout | undefined} */
+		this.pollTimer = undefined;
+		this.language = "en";
+		this.intervalMs = DEFAULT_INTERVAL_S * 1000;
+		this.backoffMs = 0;
+		this.stopped = false;
+		this.lastLoggedError = "";
+		this.lastStationFetch = 0;
 
-      callback();
-    } catch (e) {
-      callback();
-    }
-  }
+		this.on("ready", this.onReady.bind(this));
+		this.on("unload", this.onUnload.bind(this));
+	}
 
-  /**
-   * Is called if a subscribed state changes
-   * @param {string} id
-   * @param {ioBroker.State | null | undefined} state
-   */
-  onStateChange(id, state) {
-    if (state) {
-    } else {
-    }
-  }
-  
- requestData(adapter) {
-    // fetch data from AWEKAS API server
-    let url = "https://api.awekas.at/current.php?key=";
+	async onReady() {
+		await this.setState("info.connection", false, true);
 
-    if (adapter.config.token == "" || adapter.config.token == undefined) {
-      adapter.log.error("no API Key set!");
-    } else {
-      //adapter.log.info('REQUEST: '+ url + adapter.config.token + "&lng=" + language);
+		let token = typeof this.config.token === "string" ? this.config.token.trim() : "";
+		// the key is base64; accept it also when it was copied URL-encoded (%2B, %2F, %3D)
+		if (/%[0-9a-f]{2}/i.test(token)) {
+			try {
+				token = decodeURIComponent(token);
+			} catch {
+				// keep as entered, format check below reports the problem
+			}
+		}
+		if (!token) {
+			this.log.error("No AWEKAS API key configured. Please enter your key in the adapter settings.");
+			return;
+		}
+		if (!/^[A-Za-z0-9+/=_-]{8,256}$/.test(token)) {
+			this.log.error("The configured AWEKAS API key has an invalid format. Please check the adapter settings.");
+			return;
+		}
+		this.token = token;
 
-        axios
-        .get(url + adapter.config.token + "&lng=" + language)
-        .then( async function (response) {
-          if (response.status == 200) {
-            //adapter.log.info('Response :'  + JSON.stringify(response.data));
-            try {
-              let obj = response.data;
-              let APIerror = obj.error;
+		let interval = Number(this.config.interval) || DEFAULT_INTERVAL_S;
+		if (interval < MIN_INTERVAL_S) {
+			this.log.warn(`Interval ${interval}s is below the minimum, using ${MIN_INTERVAL_S}s.`);
+			interval = MIN_INTERVAL_S;
+		}
+		this.intervalMs = Math.min(interval, MAX_INTERVAL_S) * 1000;
 
-              await adapter.setStateAsync("error", { val: APIerror, ack: true });
-              
-              if (APIerror == null) {
-                await adapter.setStateAsync("fetchdate", { val: obj.fetchdate, ack: true });
-                await adapter.setStateAsync("datatimestamp", {
-                  val: obj.current.datatimestamp,
-                  ack: true,
-                });
-                await adapter.setStateAsync("timeoffset", {
-                  val: obj.current.timeoffset,
-                  ack: true,
-                });
-                await adapter.setStateAsync("conditiontimestamp", {
-                  val: obj.current.conditiontimestamp,
-                  ack: true,
-                });
-                await adapter.setStateAsync("condition", {
-                  val: obj.current.condition,
-                  ack: true,
-                });
+		this.language = await this.detectLanguage();
 
-                // current values
-                await adapter.setStateAsync("current_temperature", {
-                  val: obj.current.temperature,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_dewpoint", {
-                  val: obj.current.dewpoint,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_windchill", {
-                  val: obj.current.windchill,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_wetbulbtemperature", {
-                  val: obj.current.wetbulbtemperature,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_humidity", {
-                  val: obj.current.humidity,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_airpress_rel", {
-                  val: obj.current.airpress_rel,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_tendency", {
-                  val: obj.current.tendency,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_precipitation", {
-                  val: obj.current.precipitation,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_rainrate", {
-                  val: obj.current.rainrate,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_itsraining", {
-                  val: obj.current.itsraining,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_windspeed", {
-                  val: obj.current.windspeed,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_gustspeed", {
-                  val: obj.current.gustspeed,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_winddirection", {
-                  val: obj.current.winddirection,
-                  ack: true,
-                });
-                let winddir_text = adapter.convertWinddirText(obj.current.winddirection);
-                await adapter.setStateAsync("current_winddirection_text", {
-                  val: winddir_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_uv", {
-                  val: obj.current.uv,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_solar", {
-                  val: obj.current.solar,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_brightness", {
-                  val: obj.current.brightness,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_suntime", {
-                  val: obj.current.suntime,
-                  ack: true,
-                });
-                await adapter.setStateAsync("snowheighttimestamp", {
-                  val: obj.current.snowheighttimestamp,
-                  ack: true,
-                });
-                await adapter.setStateAsync("snowheight", {
-                  val: obj.current.snowheight,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_temp1", {
-                  val: obj.current.temp1,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_temp2", {
-                  val: obj.current.temp2,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_temp3", {
-                  val: obj.current.temp3,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_temp4", {
-                  val: obj.current.temp4,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_humidity1", {
-                  val: obj.current.humidity1,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_humidity2", {
-                  val: obj.current.humidity2,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_humidity3", {
-                  val: obj.current.humidity3,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_humidity4", {
-                  val: obj.current.humidity4,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_soilmoisture1", {
-                  val: obj.current.soilmoisture1,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_soilmoisture2", {
-                  val: obj.current.soilmoisture2,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_soilmoisture3", {
-                  val: obj.current.soilmoisture3,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_soilmoisture4", {
-                  val: obj.current.soilmoisture4,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_leafwetness1", {
-                  val: obj.current.leafwetness1,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_leafwetness2", {
-                  val: obj.current.leafwetness2,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_indoortemperature", {
-                  val: obj.current.indoortemperature,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_indoorhumidity", {
-                  val: obj.current.indoorhumidity,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_airquality_pm1", {
-                  val: obj.current.airquality_pm1,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_airquality_pm2", {
-                  val: obj.current.airquality_pm2,
-                  ack: true,
-                });
-                await adapter.setStateAsync("current_airquality_pm10", {
-                  val: obj.current.airquality_pm10,
-                  ack: true,
-                });
+		await this.createObjects();
 
-                // 1h values
-                await adapter.setStateAsync("1h_precipitation", {
-                  val: obj["1h"]["precipitation_1h"],
-                  ack: true,
-                });
+		// random start delay (5 s up to one interval) spreads restarts of many installations
+		const startDelay = 5000 + Math.floor(Math.random() * Math.max(0, this.intervalMs - 5000));
+		this.log.info(`AWEKAS connector started (interval ${this.intervalMs / 1000}s, language ${this.language}).`);
+		this.log.debug(`First request in ${Math.round(startDelay / 1000)}s`);
+		this.schedule(startDelay);
+	}
 
-                // values for current da
-                await adapter.setStateAsync("day_temp_min", {
-                  val: obj.day.temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_temp_min_ts", {
-                  val: obj.day.temp_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_temp_max", {
-                  val: obj.day.temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_temp_max_ts", {
-                  val: obj.day.temp_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_dewpoint_min", {
-                  val: obj.day.dewpoint_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_dewpoint_min_ts", {
-                  val: obj.day.dewpoint_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_dewpoint_max", {
-                  val: obj.day.dewpoint_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_dewpoint_max_ts", {
-                  val: obj.day.dewpoint_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_hum_min", {
-                  val: obj.day.hum_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_hum_min_ts", {
-                  val: obj.day.hum_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_hum_max", {
-                  val: obj.day.hum_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_hum_max_ts", {
-                  val: obj.day.hum_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airp_rel_min", {
-                  val: obj.day.airp_rel_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airp_rel_min_ts", {
-                  val: obj.day.airp_rel_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airp_rel_max", {
-                  val: obj.day.airp_rel_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airp_rel_max_ts", {
-                  val: obj.day.airp_rel_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_windspeed_min", {
-                  val: obj.day.windspeed_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_windspeed_min_ts", {
-                  val: obj.day.windspeed_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_windspeed_max", {
-                  val: obj.day.windspeed_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_windspeed_max_ts", {
-                  val: obj.day.windspeed_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_winddir_max", {
-                  val: obj.day.winddir_max,
-                  ack: true,
-                });
-                let winddir_max_text = adapter.convertWinddirText(obj.day.winddir_max);
-                await adapter.setStateAsync("day_winddir_max_text", {
-                  val: winddir_max_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_gustspeed_min", {
-                  val: obj.day.gustspeed_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_gustspeed_min_ts", {
-                  val: obj.day.gustspeed_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_gustspeed_max", {
-                  val: obj.day.gustspeed_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_gustspeed_max_ts", {
-                  val: obj.day.gustspeed_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_gustdir_max", {
-                  val: obj.day.gustdir_max,
-                  ack: true,
-                });
-                let gustdir_max_text = adapter.convertWinddirText(obj.day.gustdir_max);
-                await adapter.setStateAsync("day_gustdir_max_text", {
-                  val: gustdir_max_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_rainrate_max", {
-                  val: obj.day.rainrate_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_rainrate_max_ts", {
-                  val: obj.day.rainrate_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_precipitation_24h", {
-                  val: obj.day.precipitation_24h,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_brightness_max", {
-                  val: obj.day.brightness_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_brightness_max_ts", {
-                  val: obj.day.brightness_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_solar_max", {
-                  val: obj.day.solar_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_solar_max_ts", {
-                  val: obj.day.solar_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_uv_max", {
-                  val: obj.day.uv_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_uv_max_ts", {
-                  val: obj.day.uv_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_intemp_min", {
-                  val: obj.day.intemp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_intemp_min_ts", {
-                  val: obj.day.intemp_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_intemp_max", {
-                  val: obj.day.intemp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_intemp_max_ts", {
-                  val: obj.day.intemp_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_inhum_min", {
-                  val: obj.day.inhum_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_inhum_min_ts", {
-                  val: obj.day.inhum_min_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_inhum_max", {
-                  val: obj.day.inhum_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_inhum_max_ts", {
-                  val: obj.day.inhum_max_ts,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airquality_pm1", {
-                  val: obj.day.airquality_pm1,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airquality_pm2", {
-                  val: obj.day.airquality_pm2,
-                  ack: true,
-                });
-                await adapter.setStateAsync("day_airquality_pm10", {
-                  val: obj.day.airquality_pm10,
-                  ack: true,
-                });
+	/**
+	 * @param {() => void} callback
+	 */
+	onUnload(callback) {
+		try {
+			this.stopped = true;
+			if (this.pollTimer) this.clearTimeout(this.pollTimer);
+			callback();
+		} catch {
+			callback();
+		}
+	}
 
-                // forecast Day 0
-                await adapter.setStateAsync("forecast_day0_code", {
-                  val: obj.forecast.day0.fc_code,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day0_icon", {
-                  val: obj.forecast.day0.fc_icon,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day0_text", {
-                  val: obj.forecast.day0.fc_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day0_temp_min", {
-                  val: obj.forecast.day0.fc_temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day0_temp_max", {
-                  val: obj.forecast.day0.fc_temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day0_rainsum", {
-                  val: obj.forecast.day0.fc_rainsum,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day0_rain_possibility", {
-                  val: obj.forecast.day0.fc_rain_possibility,
-                  ack: true,
-                });
+	/** @returns {Promise<string>} */
+	async detectLanguage() {
+		const configured = typeof this.config.language === "string" ? this.config.language : "";
+		if (SUPPORTED_LANGUAGES.includes(configured)) return configured;
+		try {
+			const sys = await this.getForeignObjectAsync("system.config");
+			const lang = sys && sys.common && sys.common.language;
+			if (lang && SUPPORTED_LANGUAGES.includes(lang)) return lang;
+		} catch (e) {
+			this.log.debug(`Could not read system language: ${e}`);
+		}
+		return "en";
+	}
 
-                // forecast Day 1
-                await adapter.setStateAsync("forecast_day1_code", {
-                  val: obj.forecast.day1.fc_code,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day1_icon", {
-                  val: obj.forecast.day1.fc_icon,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day1_text", {
-                  val: obj.forecast.day1.fc_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day1_temp_min", {
-                  val: obj.forecast.day1.fc_temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day1_temp_max", {
-                  val: obj.forecast.day1.fc_temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day1_rainsum", {
-                  val: obj.forecast.day1.fc_rainsum,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day1_rain_possibility", {
-                  val: obj.forecast.day1.fc_rain_possibility,
-                  ack: true,
-                });
+	async createObjects() {
+		for (const [id, name] of Object.entries(channels)) {
+			await this.extendObject(id, { type: "channel", common: { name }, native: {} });
+		}
+		for (const def of defs) {
+			/** @type {ioBroker.StateCommon} */
+			const common = {
+				name: def.name || def.id,
+				type: def.type,
+				role: def.role || "value",
+				read: true,
+				write: false,
+			};
+			if (def.unit) common.unit = def.unit;
+			if (def.states) common.states = def.states;
+			await this.extendObject(def.id, { type: "state", common, native: {} });
+		}
+	}
 
-                // forecast Day 2
-                await adapter.setStateAsync("forecast_day2_code", {
-                  val: obj.forecast.day2.fc_code,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day2_icon", {
-                  val: obj.forecast.day2.fc_icon,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day2_text", {
-                  val: obj.forecast.day2.fc_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day2_temp_min", {
-                  val: obj.forecast.day2.fc_temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day2_temp_max", {
-                  val: obj.forecast.day2.fc_temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day2_rainsum", {
-                  val: obj.forecast.day2.fc_rainsum,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day2_rain_possibility", {
-                  val: obj.forecast.day2.fc_rain_possibility,
-                  ack: true,
-                });
+	/**
+	 * Schedule the next request. Only one timer exists at any time.
+	 * @param {number} delayMs
+	 */
+	schedule(delayMs) {
+		if (this.stopped) return;
+		if (this.pollTimer) this.clearTimeout(this.pollTimer);
+		this.pollTimer = this.setTimeout(() => {
+			this.pollTimer = undefined;
+			this.poll().catch((e) => this.log.error(`Unexpected error: ${e}`));
+		}, delayMs);
+	}
 
-                // forecast Day 3
-                await adapter.setStateAsync("forecast_day3_code", {
-                  val: obj.forecast.day3.fc_code,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day3_icon", {
-                  val: obj.forecast.day3.fc_icon,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day3_text", {
-                  val: obj.forecast.day3.fc_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day3_temp_min", {
-                  val: obj.forecast.day3.fc_temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day3_temp_max", {
-                  val: obj.forecast.day3.fc_temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day3_rainsum", {
-                  val: obj.forecast.day3.fc_rainsum,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day3_rain_possibility", {
-                  val: obj.forecast.day3.fc_rain_possibility,
-                  ack: true,
-                });
+	/** @param {number} ms */
+	withJitter(ms) {
+		return Math.round(ms * (1 - JITTER + Math.random() * 2 * JITTER));
+	}
 
-                // forecast Day 4
-                await adapter.setStateAsync("forecast_day4_code", {
-                  val: obj.forecast.day4.fc_code,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day4_icon", {
-                  val: obj.forecast.day4.fc_icon,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day4_text", {
-                  val: obj.forecast.day4.fc_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day4_temp_min", {
-                  val: obj.forecast.day4.fc_temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day4_temp_max", {
-                  val: obj.forecast.day4.fc_temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day4_rainsum", {
-                  val: obj.forecast.day4.fc_rainsum,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day4_rain_possibility", {
-                  val: obj.forecast.day4.fc_rain_possibility,
-                  ack: true,
-                });
+	async poll() {
+		let nextDelay = this.withJitter(this.intervalMs);
+		try {
+			const data = await this.fetchData();
+			const apiError = typeof data.error === "string" ? data.error.trim() : data.error ? String(data.error) : "";
 
-                // forecast Day 5
-                await adapter.setStateAsync("forecast_day5_code", {
-                  val: obj.forecast.day5.fc_code,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day5_icon", {
-                  val: obj.forecast.day5.fc_icon,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day5_text", {
-                  val: obj.forecast.day5.fc_text,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day5_temp_min", {
-                  val: obj.forecast.day5.fc_temp_min,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day5_temp_max", {
-                  val: obj.forecast.day5.fc_temp_max,
-                  ack: true,
-                });
-                await adapter.setStateAsync("forecast_day5_rainsum", {
-                  val: obj.forecast.day5.fc_rainsum,
-                  ack: true,
-                });
-                adapter.setStateAsync("forecast_day5_rain_possibility", {
-                  val: obj.forecast.day5.fc_rain_possibility,
-                  ack: true,
-                });
+			if (apiError) {
+				await this.setState("info.error", apiError.slice(0, MAX_STRING_LENGTH), true);
+				await this.setState("info.connection", false, true);
+				const key = apiError.toLowerCase();
+				if (PERMANENT_ERRORS[key]) {
+					this.log.error(`${PERMANENT_ERRORS[key]} Polling stopped until the configuration is changed.`);
+					this.stopped = true;
+					return;
+				}
+				if (key.includes("quota")) {
+					this.logOnce("quota", "AWEKAS API quota exceeded - waiting 15 minutes.");
+					nextDelay = this.withJitter(QUOTA_WAIT_MS);
+				} else {
+					this.logOnce(key, `AWEKAS API reported an error: ${apiError}`);
+					nextDelay = this.nextBackoff();
+				}
+				return;
+			}
 
-                // check timer if in waiting state
-                if (timer == 300000) {
-                  timer = APIrequestIntervall;
-                  adapter.setTimer(adapter);
-                  adapter.log.info(
-                    "AWEKAS Server connection restored. set request timer to normal"
-                  );
-                }
-              } else {
-                // station API error handling
-                if (APIerror == "maximum quota exceeded") {
-                  adapter.log.warn(
-                    "maximum quota exceeded - to many requests. waiting 5min..."
-                  );
-                  timer = 300000;
-                  adapter.setTimer(adapter);
-                }
-                if (APIerror == "AWEKAS plus not active") {
-                  adapter.log.warn(
-                    "AWEKAS Plus not active - AWEKAS Plus is necessary for station API- please activate AWEKAS Plus in AWEKAS user profile."
-                  );
-                  timer = 300000;
-                  adapter.setTimer(adapter);
-                }
-                if (APIerror == "invalid key") {
-                  adapter.log.warn(
-                    "Invalid AWEKAS API key - please get the correct key from https://my.awekas.at "
-                  );
-                  timer = 300000;
-                  adapter.setTimer(adapter);
-                }
-              }
-            } catch (error) {
-              adapter.log.warn("Could not write object: " + error);
-            }
-          } else {
-            adapter.log.warn("no response from AWEKAS server");
-          }
-        })
-        .catch(function (error) {
-          adapter.log.info("AWEKAS server cannot be contacted. waiting 5min...");
-          timer = 300000;
-          adapter.setTimer(adapter);
-        });
-    }
-  }
+			await this.writeStates(data, "current");
+			await this.setState("info.error", "", true);
+			await this.setState("info.connection", true, true);
+			if (this.backoffMs) this.log.info("Connection to AWEKAS restored.");
+			this.backoffMs = 0;
+			this.lastLoggedError = "";
 
-  // set intervall for request
-  setTimer(adapter) {
-    clearInterval(intervalID);
-    intervalID = setInterval(this.requestData, timer, adapter);
-  }
-  
-  // transform deggree to winddirection in selected language
-  convertWinddirText(richtung) {
-    if (richtung >=0 && richtung <=360){
-       richtung = 2 + Math.floor((richtung - 11.24) / 22.5);
-       if (richtung > 16) richtung = 1;
+			if (Date.now() - this.lastStationFetch > STATION_REFRESH_MS) {
+				await this.updateStation();
+			}
+		} catch (e) {
+			await this.setState("info.connection", false, true);
+			if (e instanceof HttpError && e.retryAfterMs) {
+				nextDelay = Math.min(Math.max(e.retryAfterMs, this.intervalMs), BACKOFF_MAX_MS);
+			} else {
+				nextDelay = this.nextBackoff();
+			}
+			this.logOnce(
+				String(e && e.message),
+				`AWEKAS server not reachable (${e && e.message}). Next try in ${Math.round(nextDelay / 60000)} min.`,
+			);
+		} finally {
+			this.schedule(nextDelay);
+		}
+	}
 
-       let wr;
-       if (language == "de") {
-          wr = ["-","N","NNO","NO","ONO","O","OSO","SO","SSO","S","SSW","SW","WSW","W","WNW","NW","NNW"];
-       }
-       if (language == "en") {
-          wr = ["-","N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
-       }
-       if (language == "es") {
-          wr = ["-","N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"];
-       }
-       if (language == "it") {
-          wr = ["-","N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"];
-       }
-       if (language == "fr") {
-          wr = ["-","N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"];
-       }
-       if (language == "nl") {
-          wr = ["-","N","NNO","NO","ONO","O","OZO","ZO","ZZO","Z","ZZW","ZW","WZW","W","WNW","NW","NNW"];
-       }
-      return wr[richtung];
-    }
-  }
+	/** Station data is optional: errors are only logged, they never affect the polling. */
+	async updateStation() {
+		this.lastStationFetch = Date.now();
+		try {
+			// AWEKAS allows max. 2 requests per second
+			if (typeof this.delay === "function") await this.delay(1500);
+			else await sleep(1500);
+			if (this.stopped) return;
+			const data = await this.fetchData("station");
+			if (data.error) {
+				this.log.debug(`station.php reported: ${String(data.error).slice(0, 200)}`);
+				return;
+			}
+			await this.writeStates(data, "station");
+		} catch (e) {
+			this.log.debug(`Could not read station data: ${e && e.message}`);
+		}
+	}
 
-  createObject(adapter) {
-    try {
-      adapter.setObjectNotExistsAsync("fetchdate", {
-        type: "state",
-        common: {
-          name: "fetchdate",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("error", {
-        type: "state",
-        common: {
-          name: "error",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("datatimestamp", {
-        type: "state",
-        common: {
-          name: "datatimestamp",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("timeoffset", {
-        type: "state",
-        common: {
-          name: "timeoffset",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("conditiontimestamp", {
-        type: "state",
-        common: {
-          name: "conditiontimestamp",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("condition", {
-        type: "state",
-        common: {
-          name: "condition",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_temperature", {
-        type: "state",
-        common: {
-          name: "current_temperature",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_dewpoint", {
-        type: "state",
-        common: {
-          name: "current_dewpoint",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_windchill", {
-        type: "state",
-        common: {
-          name: "current_windchill",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_wetbulbtemperature", {
-        type: "state",
-        common: {
-          name: "current_wetbulbtemperature",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_humidity", {
-        type: "state",
-        common: {
-          name: "current_humidity",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_airpress_rel", {
-        type: "state",
-        common: {
-          name: "current_airpress_rel",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "hPa",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_tendency", {
-        type: "state",
-        common: {
-          name: "current_tendency",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_precipitation", {
-        type: "state",
-        common: {
-          name: "current_precipitation",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_rainrate", {
-        type: "state",
-        common: {
-          name: "current_rainrate",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_itsraining", {
-        type: "state",
-        common: {
-          name: "current_itsraining",
-          type: "boolean",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_windspeed", {
-        type: "state",
-        common: {
-          name: "current_windspeed",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "km/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_gustspeed", {
-        type: "state",
-        common: {
-          name: "current_gustspeed",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "km/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_winddirection", {
-        type: "state",
-        common: {
-          name: "current_winddirection",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_winddirection_text", {
-        type: "state",
-        common: {
-          name: "current_winddirection",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_uv", {
-        type: "state",
-        common: {
-          name: "current_uv",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "idx",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_solar", {
-        type: "state",
-        common: {
-          name: "current_solar",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "W/m²",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_brightness", {
-        type: "state",
-        common: {
-          name: "current_brightness",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "Lux",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_suntime", {
-        type: "state",
-        common: {
-          name: "current_suntime",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("snowheighttimestamp", {
-        type: "state",
-        common: {
-          name: "snowheighttimestamp",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("snowheight", {
-        type: "state",
-        common: {
-          name: "snowheight",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "cm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_temp1", {
-        type: "state",
-        common: {
-          name: "current_temp1",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_temp2", {
-        type: "state",
-        common: {
-          name: "current_temp2",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_temp3", {
-        type: "state",
-        common: {
-          name: "current_temp3",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_temp4", {
-        type: "state",
-        common: {
-          name: "current_temp4",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_humidity1", {
-        type: "state",
-        common: {
-          name: "current_humidity1",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_humidity2", {
-        type: "state",
-        common: {
-          name: "current_humidity2",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_humidity3", {
-        type: "state",
-        common: {
-          name: "current_humidity3",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_humidity4", {
-        type: "state",
-        common: {
-          name: "current_humidity4",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_soilmoisture1", {
-        type: "state",
-        common: {
-          name: "current_soilmoisture1",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "cbar",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_soilmoisture2", {
-        type: "state",
-        common: {
-          name: "current_soilmoisture2",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "cbar",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_soilmoisture3", {
-        type: "state",
-        common: {
-          name: "current_soilmoisture3",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "cbar",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_soilmoisture4", {
-        type: "state",
-        common: {
-          name: "current_soilmoisture4",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "cbar",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_leafwetness1", {
-        type: "state",
-        common: {
-          name: "current_leafwetness1",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_leafwetness2", {
-        type: "state",
-        common: {
-          name: "current_leafwetness2",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_indoortemperature", {
-        type: "state",
-        common: {
-          name: "current_indoortemperature",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_indoorhumidity", {
-        type: "state",
-        common: {
-          name: "current_indoorhumidity",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_airquality_pm1", {
-        type: "state",
-        common: {
-          name: "current_airquality_pm1",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "μg/m³",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_airquality_pm2", {
-        type: "state",
-        common: {
-          name: "current_airquality_pm2",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "μg/m³",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("current_airquality_pm10", {
-        type: "state",
-        common: {
-          name: "current_airquality_pm10",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "μg/m³",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("1h_precipitation", {
-        type: "state",
-        common: {
-          name: "1h_precipitation",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_temp_min", {
-        type: "state",
-        common: {
-          name: "day_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_temp_min_ts", {
-        type: "state",
-        common: {
-          name: "day_temp_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_temp_max", {
-        type: "state",
-        common: {
-          name: "day_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_temp_max_ts", {
-        type: "state",
-        common: {
-          name: "day_temp_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_dewpoint_min", {
-        type: "state",
-        common: {
-          name: "day_dewpoint_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_dewpoint_min_ts", {
-        type: "state",
-        common: {
-          name: "day_dewpoint_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_dewpoint_max", {
-        type: "state",
-        common: {
-          name: "day_dewpoint_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_dewpoint_max_ts", {
-        type: "state",
-        common: {
-          name: "day_dewpoint_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_hum_min", {
-        type: "state",
-        common: {
-          name: "day_hum_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_hum_min_ts", {
-        type: "state",
-        common: {
-          name: "day_hum_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_hum_max", {
-        type: "state",
-        common: {
-          name: "day_hum_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_hum_max_ts", {
-        type: "state",
-        common: {
-          name: "day_hum_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airp_rel_min", {
-        type: "state",
-        common: {
-          name: "day_airp_rel_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "hPa",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airp_rel_min_ts", {
-        type: "state",
-        common: {
-          name: "day_airp_rel_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airp_rel_max", {
-        type: "state",
-        common: {
-          name: "day_airp_rel_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "hPa",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airp_rel_max_ts", {
-        type: "state",
-        common: {
-          name: "day_airp_rel_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_windspeed_min", {
-        type: "state",
-        common: {
-          name: "day_windspeed_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "km/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_windspeed_min_ts", {
-        type: "state",
-        common: {
-          name: "day_windspeed_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_windspeed_max", {
-        type: "state",
-        common: {
-          name: "day_windspeed_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "km/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_windspeed_max_ts", {
-        type: "state",
-        common: {
-          name: "day_windspeed_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_gustdir_max", {
-        type: "state",
-        common: {
-          name: "day_gustdir_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_gustdir_max_text", {
-        type: "state",
-        common: {
-          name: "day_gustdir_max",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_winddir_max", {
-        type: "state",
-        common: {
-          name: "day_winddir_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_winddir_max_text", {
-        type: "state",
-        common: {
-          name: "day_winddir_max",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_gustspeed_min", {
-        type: "state",
-        common: {
-          name: "day_gustspeed_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "km/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_gustspeed_min_ts", {
-        type: "state",
-        common: {
-          name: "day_gustspeed_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_gustspeed_max", {
-        type: "state",
-        common: {
-          name: "day_gustspeed_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "km/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_gustspeed_max_ts", {
-        type: "state",
-        common: {
-          name: "day_gustspeed_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_rainrate_max", {
-        type: "state",
-        common: {
-          name: "day_rainrate_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm/h",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_rainrate_max_ts", {
-        type: "state",
-        common: {
-          name: "day_rainrate_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_precipitation_24h", {
-        type: "state",
-        common: {
-          name: "day_precipitation_24h",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_brightness_max", {
-        type: "state",
-        common: {
-          name: "day_brightness_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "Lux",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_brightness_max_ts", {
-        type: "state",
-        common: {
-          name: "day_brightness_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_solar_max", {
-        type: "state",
-        common: {
-          name: "day_solar_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "W/m²",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_solar_max_ts", {
-        type: "state",
-        common: {
-          name: "day_solar_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_uv_max", {
-        type: "state",
-        common: {
-          name: "day_uv_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "idx",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_uv_max_ts", {
-        type: "state",
-        common: {
-          name: "day_uv_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_intemp_min", {
-        type: "state",
-        common: {
-          name: "day_intemp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_intemp_min_ts", {
-        type: "state",
-        common: {
-          name: "day_intemp_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_intemp_max", {
-        type: "state",
-        common: {
-          name: "day_intemp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_intemp_max_ts", {
-        type: "state",
-        common: {
-          name: "day_intemp_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_inhum_min", {
-        type: "state",
-        common: {
-          name: "day_inhum_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_inhum_min_ts", {
-        type: "state",
-        common: {
-          name: "day_inhum_min_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_inhum_max", {
-        type: "state",
-        common: {
-          name: "day_inhum_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_inhum_max_ts", {
-        type: "state",
-        common: {
-          name: "day_inhum_max_ts",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airquality_pm1", {
-        type: "state",
-        common: {
-          name: "day_airquality_pm1",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "μg/m³",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airquality_pm2", {
-        type: "state",
-        common: {
-          name: "day_airquality_pm2",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "μg/m³",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("day_airquality_pm10", {
-        type: "state",
-        common: {
-          name: "day_airquality_pm10",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "μg/m³",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_code", {
-        type: "state",
-        common: {
-          name: "forecast_day0_code",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_icon", {
-        type: "state",
-        common: {
-          name: "forecast_day0_icon",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_text", {
-        type: "state",
-        common: {
-          name: "forecast_day0_text",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_temp_min", {
-        type: "state",
-        common: {
-          name: "forecast_day0_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_temp_max", {
-        type: "state",
-        common: {
-          name: "forecast_day0_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_rainsum", {
-        type: "state",
-        common: {
-          name: "forecast_day0_rainsum",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day0_rain_possibility", {
-        type: "state",
-        common: {
-          name: "forecast_day0_rain_possibility",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_code", {
-        type: "state",
-        common: {
-          name: "forecast_day1_code",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_icon", {
-        type: "state",
-        common: {
-          name: "forecast_day1_icon",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_text", {
-        type: "state",
-        common: {
-          name: "forecast_day1_text",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_temp_min", {
-        type: "state",
-        common: {
-          name: "forecast_day1_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_temp_max", {
-        type: "state",
-        common: {
-          name: "forecast_day1_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_rainsum", {
-        type: "state",
-        common: {
-          name: "forecast_day1_rainsum",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day1_rain_possibility", {
-        type: "state",
-        common: {
-          name: "forecast_day1_rain_possibility",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_code", {
-        type: "state",
-        common: {
-          name: "forecast_day2_code",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_icon", {
-        type: "state",
-        common: {
-          name: "forecast_day2_icon",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_text", {
-        type: "state",
-        common: {
-          name: "forecast_day2_text",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_temp_min", {
-        type: "state",
-        common: {
-          name: "forecast_day2_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_temp_max", {
-        type: "state",
-        common: {
-          name: "forecast_day2_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_rainsum", {
-        type: "state",
-        common: {
-          name: "forecast_day2_rainsum",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day2_rain_possibility", {
-        type: "state",
-        common: {
-          name: "forecast_day2_rain_possibility",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_code", {
-        type: "state",
-        common: {
-          name: "forecast_day3_code",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_icon", {
-        type: "state",
-        common: {
-          name: "forecast_day3_icon",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_text", {
-        type: "state",
-        common: {
-          name: "forecast_day3_text",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_temp_min", {
-        type: "state",
-        common: {
-          name: "forecast_day3_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_temp_max", {
-        type: "state",
-        common: {
-          name: "forecast_day3_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_rainsum", {
-        type: "state",
-        common: {
-          name: "forecast_day3_rainsum",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day3_rain_possibility", {
-        type: "state",
-        common: {
-          name: "forecast_day3_rain_possibility",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_code", {
-        type: "state",
-        common: {
-          name: "forecast_day4_code",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_icon", {
-        type: "state",
-        common: {
-          name: "forecast_day4_icon",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_text", {
-        type: "state",
-        common: {
-          name: "forecast_day4_text",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_temp_min", {
-        type: "state",
-        common: {
-          name: "forecast_day4_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_temp_max", {
-        type: "state",
-        common: {
-          name: "forecast_day4_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_rainsum", {
-        type: "state",
-        common: {
-          name: "forecast_day4_rainsum",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day4_rain_possibility", {
-        type: "state",
-        common: {
-          name: "forecast_day4_rain_possibility",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_code", {
-        type: "state",
-        common: {
-          name: "forecast_day5_code",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_icon", {
-        type: "state",
-        common: {
-          name: "forecast_day5_icon",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_text", {
-        type: "state",
-        common: {
-          name: "forecast_day5_text",
-          type: "string",
-          role: "value",
-          read: true,
-          write: false,
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_temp_min", {
-        type: "state",
-        common: {
-          name: "forecast_day5_temp_min",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_temp_max", {
-        type: "state",
-        common: {
-          name: "forecast_day5_temp_max",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "°C",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_rainsum", {
-        type: "state",
-        common: {
-          name: "forecast_day5_rainsum",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "mm",
-        },
-        native: {},
-      });
-      adapter.setObjectNotExistsAsync("forecast_day5_rain_possibility", {
-        type: "state",
-        common: {
-          name: "forecast_day5_rain_possibility",
-          type: "number",
-          role: "value",
-          read: true,
-          write: false,
-          unit: "%",
-        },
-        native: {},
-      });
-    } catch (error) {
-      adapter.log.error("Could create object: " + error);
-    }
-  }
+	nextBackoff() {
+		this.backoffMs = this.backoffMs ? Math.min(this.backoffMs * 2, BACKOFF_MAX_MS) : BACKOFF_START_MS;
+		return this.withJitter(this.backoffMs);
+	}
 
+	/**
+	 * Log a warning only when the error changes, to avoid flooding the log.
+	 * @param {string} key
+	 * @param {string} message
+	 */
+	logOnce(key, message) {
+		if (this.lastLoggedError === key) {
+			this.log.debug(message);
+		} else {
+			this.log.warn(message);
+			this.lastLoggedError = key;
+		}
+	}
+
+	/**
+	 * @param {keyof typeof ENDPOINTS} [endpoint]
+	 * @returns {Promise<Record<string, any>>}
+	 */
+	async fetchData(endpoint = "current") {
+		let url = `${API_BASE}${ENDPOINTS[endpoint]}?key=${encodeURIComponent(this.token)}`;
+		if (endpoint === "current") url += `&lng=${this.language}`;
+		const res = await fetch(url, {
+			method: "GET",
+			redirect: "error",
+			headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+		});
+
+		if (!res.ok) {
+			let retryAfterMs = 0;
+			const ra = res.headers.get("retry-after");
+			if (ra && /^\d+$/.test(ra)) retryAfterMs = Number(ra) * 1000;
+			throw new HttpError(`HTTP ${res.status}`, retryAfterMs);
+		}
+
+		const length = Number(res.headers.get("content-length") || 0);
+		if (length > MAX_RESPONSE_BYTES) throw new Error("response too large");
+		const text = await res.text();
+		if (text.length > MAX_RESPONSE_BYTES) throw new Error("response too large");
+
+		// debug output helps analysing problems on user systems (contains no API key)
+		this.log.debug(`AWEKAS ${endpoint} response (${text.length} bytes): ${text.slice(0, 4000)}`);
+
+		let data;
+		try {
+			data = JSON.parse(text);
+		} catch {
+			throw new Error("invalid JSON response");
+		}
+		if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("unexpected response format");
+		return data;
+	}
+
+	/**
+	 * @param {Record<string, any>} data
+	 * @param {string} endpoint
+	 */
+	async writeStates(data, endpoint) {
+		for (const def of defs) {
+			if (def.endpoint !== endpoint || def.id === "info.error") continue;
+			let val;
+			if (def.windText) {
+				const deg = this.normalize(getPath(data, def.windText), "number");
+				if (deg === undefined) continue;
+				val = deg === null ? null : this.windText(deg);
+			} else if (def.path) {
+				val = this.normalize(getPath(data, def.path), def.type);
+				if (def.timestamp && typeof val === "number") val = toMilliseconds(val);
+			}
+			if (val === undefined) continue; // field not delivered: keep last value
+			try {
+				await this.setState(def.id, val, true);
+			} catch (e) {
+				this.log.debug(`Could not write ${def.id}: ${e}`);
+			}
+		}
+	}
+
+	/**
+	 * Converts an API value to the expected type. Returns undefined if the
+	 * field is missing and null if the station has no value for it.
+	 * @param {unknown} raw
+	 * @param {ioBroker.CommonType} type
+	 * @returns {string | number | boolean | null | undefined}
+	 */
+	normalize(raw, type) {
+		if (raw === undefined) return undefined;
+		if (raw === null || raw === "" || raw === "-") return null;
+		if (typeof raw === "object") return undefined;
+		switch (type) {
+			case "number": {
+				const n = typeof raw === "number" ? raw : Number(String(raw).replace(",", "."));
+				return Number.isFinite(n) ? n : null;
+			}
+			case "boolean":
+				if (typeof raw === "boolean") return raw;
+				if (raw === 1 || raw === "1" || raw === "true") return true;
+				if (raw === 0 || raw === "0" || raw === "false") return false;
+				return null;
+			default:
+				return String(raw).slice(0, MAX_STRING_LENGTH);
+		}
+	}
+
+	/** @param {number} deg */
+	windText(deg) {
+		if (deg < 0 || deg > 360) return null;
+		const list = WIND_TEXT[this.language] || WIND_TEXT.en;
+		return list[Math.round(deg / 22.5) % 16];
+	}
+}
+
+class HttpError extends Error {
+	/**
+	 * @param {string} message
+	 * @param {number} retryAfterMs
+	 */
+	constructor(message, retryAfterMs) {
+		super(message);
+		this.retryAfterMs = retryAfterMs;
+	}
+}
+
+/** @param {number} ms */
+function sleep(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * AWEKAS delivers unix timestamps in seconds, ioBroker (role value.time) expects milliseconds.
+ * @param {number} ts
+ * @returns {number | null}
+ */
+function toMilliseconds(ts) {
+	if (ts <= 0) return null;
+	if (ts < 1e11) return ts * 1000; // seconds
+	return ts; // already milliseconds
+}
+
+/**
+ * @param {Record<string, any>} obj
+ * @param {string[]} path
+ */
+function getPath(obj, path) {
+	let cur = obj;
+	for (const p of path) {
+		if (cur === null || typeof cur !== "object" || !Object.prototype.hasOwnProperty.call(cur, p)) return undefined;
+		cur = cur[p];
+	}
+	return cur;
 }
 
 if (require.main !== module) {
-  // Export the constructor in compact mode
-  /**
-   * @param {Partial<utils.AdapterOptions>} [options={}]
-   */
-  module.exports = (options) => new AwekasWeatherConnector(options);
+	/**
+	 * @param {Partial<utils.AdapterOptions>} [options]
+	 */
+	module.exports = (options) => new AwekasConnector(options);
 } else {
-  // otherwise start the instance directly
-  new AwekasWeatherConnector();
+	new AwekasConnector();
 }
-
-
-
-

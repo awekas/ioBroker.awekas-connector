@@ -3,17 +3,65 @@
   "type": "panel",
   "items": {
     "token": {
-      "type": "text",
-      "label": "AWEKAS API key",
-      "help": "AWEKAS API Token/Key from AWEKAS user settings",
+      "type": "password",
+      "label": "apiKey",
+      "help": "keyHelp",
+      "repeat": false,
+      "visible": true,
       "sm": 12,
-      "md": 9
+      "md": 8
     },
-    "_help": {
+    "interval": {
+      "type": "number",
+      "label": "interval",
+      "help": "intervalHelp",
+      "min": 60,
+      "max": 3600,
+      "step": 10,
       "newLine": true,
-      "type": "staticText",
-      "text": "api_help",
-      "sm": 12
+      "sm": 12,
+      "md": 4
+    },
+    "language": {
+      "type": "select",
+      "label": "language",
+      "help": "languageHelp",
+      "sm": 12,
+      "md": 4,
+      "options": [
+        {
+          "label": "languageSystem",
+          "value": ""
+        },
+        {
+          "label": "Deutsch",
+          "value": "de"
+        },
+        {
+          "label": "English",
+          "value": "en"
+        },
+        {
+          "label": "Español",
+          "value": "es"
+        },
+        {
+          "label": "Italiano",
+          "value": "it"
+        },
+        {
+          "label": "Français",
+          "value": "fr"
+        },
+        {
+          "label": "Nederlands",
+          "value": "nl"
+        },
+        {
+          "label": "Polski",
+          "value": "pl"
+        }
+      ]
     }
   }
 }

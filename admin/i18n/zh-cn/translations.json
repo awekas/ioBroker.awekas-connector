@@ -1,5 +1,9 @@
 {
-    "adapter settings": "A. 非洲KAS数据收集机构的数据范围",
-    "apiKey": "AWEKASAPI的关键",
-    "keyHelp": "AWEKAS API Token/Key从AKAS用户环境中使用。 你可以从http://my.awekas.at查阅。"
+  "apiKey": "AWEKAS API key",
+  "keyHelp": "You can find the API key at https://my.awekas.at (AWEKAS Plus required). It is stored encrypted.",
+  "interval": "Request interval (seconds)",
+  "intervalHelp": "At least 60 seconds",
+  "language": "Language",
+  "languageHelp": "Language for forecast text and wind direction",
+  "languageSystem": "System language"
 }

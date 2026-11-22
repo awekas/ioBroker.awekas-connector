@@ -2,7 +2,6 @@
 
 # ioBroker.awekas-connector
 
-0.0.4
 
 [![NPM](https://nodei.co/npm/iobroker.awekas-connector.png?downloads=true)](https://nodei.co/npm/iobroker.awekas-connector/)
 
@@ -12,16 +11,57 @@
 
 fetch weather data from your AWEKAS weather station
 
-### DISCLAIMER
+This adapter is developed and maintained by AWEKAS GmbH, the operator of the AWEKAS weather network ([www.awekas.at](https://www.awekas.at)).
+It reads the data of your own weather station from the AWEKAS Stations API.
 
-Please make sure that you consider copyrights and trademarks when you use names or logos of a company and add a disclaimer to your README.
-You can check other adapters for examples or ask in the developer community. Using a name or logo of a company without permission may cause legal problems for you.
+### Requirements
 
-### Getting started
+- ioBroker js-controller 5.0.19 or newer, Admin 6.17 or newer, Node.js 18 or newer
+- a weather station registered at AWEKAS with active **AWEKAS Plus** (required for the Stations API)
 
-install the adapter at your ioBroker. Get your API ky from https://my.awekas.at and set it in the adapter settings.
+### Configuration
+
+| Setting | Description |
+|---|---|
+| AWEKAS API key | Your personal API key from https://my.awekas.at. It is stored encrypted and never written to the log. |
+| Request interval | Seconds between two requests. Minimum 60 s, default 60 s. |
+| Language | Language for forecast text and wind direction. Default: ioBroker system language (de, en, es, it, fr, nl, pl; otherwise English). |
+
+### States
+
+| Channel | Content |
+|---|---|
+| `info` | `connection` (API reachable), `error` (last API error), `fetchdate` |
+| `current` | current measurements (temperature, humidity, pressure, wind, rain, solar, extra sensors, air quality, ...) |
+| `day` | daily minimum/maximum values and their timestamps |
+| `forecast.day0` … `forecast.day5` | forecast for today and the next five days (only with active AWEKAS Stationsweb subscription) |
+| `station` | station data (location, position, hardware, software, AWEKAS Plus / Stationsweb status), refreshed once a day |
+
+Values that your station does not measure stay empty (`null`). Timestamps are stored in milliseconds (role `value.time`).
+
+### Fair use of the AWEKAS API
+
+The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. The adapter stays well below these limits and protects the AWEKAS servers:
+
+- never more than one request at a time and never more often than every 60 seconds
+- random start delay and ±10 % jitter so that many installations do not query at the same moment
+- on connection or server errors the interval is increased step by step (5, 10, 20, 40, max. 60 min)
+- if the quota is exceeded the adapter waits 15 minutes; a `Retry-After` header is respected
+- with an invalid key or inactive AWEKAS Plus the adapter stops querying until the settings are changed
 
 ## Changelog
+
+### 0.1.0 (2026-11-22)
+
+- (awekas) complete rework: the adapter now starts correctly (adapter name matched io-package.json)
+- (awekas) removed axios (was not declared as dependency) - uses built-in fetch, no runtime dependency besides adapter-core
+- (awekas) API key stored encrypted, never logged - **please re-enter your API key in the adapter settings after the update**
+- (awekas) configurable interval (min. 60 s), language selection
+- (awekas) load protection for the AWEKAS API: jitter, back-off, Retry-After, stop on permanent errors
+- (awekas) missing values no longer abort the update of all following states
+- (awekas) states structured in channels `info`, `current`, `day`, `forecast.dayN`, `station` with proper roles
+- (awekas) new: station data from station.php (once a day), value lists for condition and pressure tendency, Polish language
+- (awekas) requires js-controller >= 5.0.19, admin >= 6.17.14, Node.js >= 18
 
 ### 0.0.4 (2.9.2023)
 
@@ -37,7 +77,7 @@ install the adapter at your ioBroker. Get your API ky from https://my.awekas.at 
 
 MIT License
 
-Copyright (c) 2023 AWEKAS GmbH <mail@awekas.at> https://www.awekas.at
+Copyright (c) 2023-2026 AWEKAS GmbH <mail@awekas.at> https://www.awekas.at
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

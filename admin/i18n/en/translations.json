@@ -1,5 +1,9 @@
 {
-    "adapter settings": "Adapter settings for AWEKAS data collector",
-    "apiKey": "AWEKAS API key",
-    "keyHelp": "Use the AWEKAS API Token/Key from AWEKAS user settings. You can get it from https://my.awekas.at"
+  "apiKey": "AWEKAS API key",
+  "keyHelp": "You can find the API key at https://my.awekas.at (AWEKAS Plus required). It is stored encrypted.",
+  "interval": "Request interval (seconds)",
+  "intervalHelp": "At least 60 seconds",
+  "language": "Language",
+  "languageHelp": "Language for forecast text and wind direction",
+  "languageSystem": "System language"
 }

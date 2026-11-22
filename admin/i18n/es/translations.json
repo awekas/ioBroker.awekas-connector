@@ -1,5 +1,9 @@
 {
-    "adapter settings": "Ajustes de adaptador para recopilador de datos AWEKAS",
-    "apiKey": "AWEKAS API key",
-    "keyHelp": "Utilice el AWEKAS API Token/Key de la configuración de usuario de AWEKAS. Puede obtenerlo desde https://my.awekas.at"
+  "apiKey": "Clave API de AWEKAS",
+  "keyHelp": "Encontrará la clave API en https://my.awekas.at (se requiere AWEKAS Plus). Se guarda cifrada.",
+  "interval": "Intervalo de consulta (segundos)",
+  "intervalHelp": "Al menos 60 segundos",
+  "language": "Idioma",
+  "languageHelp": "Idioma del texto de pronóstico y de la dirección del viento",
+  "languageSystem": "Idioma del sistema"
 }

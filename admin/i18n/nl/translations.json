@@ -1,5 +1,9 @@
 {
-    "adapter settings": "AWEKAS data verzamelaar",
-    "apiKey": "AWEKAS API",
-    "keyHelp": "Gebruik de AWEKAS API Token/Key van AWEKAS gebruikers. Je kunt het van mijn aardappelen krijgen"
+  "apiKey": "AWEKAS API-sleutel",
+  "keyHelp": "De API-sleutel vindt u op https://my.awekas.at (AWEKAS Plus vereist). Hij wordt versleuteld opgeslagen.",
+  "interval": "Opvraaginterval (seconden)",
+  "intervalHelp": "Minimaal 60 seconden",
+  "language": "Taal",
+  "languageHelp": "Taal voor voorspellingstekst en windrichting",
+  "languageSystem": "Systeemtaal"
 }
