@@ -19,7 +19,7 @@
     "url": "https://github.com/awekas/ioBroker.awekas-connector.git"
   },
   "engines": {
-    "node": ">= 18"
+    "node": ">= 20"
   },
   "dependencies": {
     "@iobroker/adapter-core": "^3.2.3"

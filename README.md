@@ -16,7 +16,7 @@ It reads the data of your own weather station from the AWEKAS Stations API.
 
 ### Requirements
 
-- ioBroker js-controller 5.0.19 or newer, Admin 6.17 or newer, Node.js 18 or newer
+- ioBroker js-controller 5.0.19 or newer, Admin 6.17 or newer, Node.js 20 or newer (22 recommended)
 - a weather station registered at AWEKAS with active **AWEKAS Plus** (required for the Stations API)
 
 ### Configuration
@@ -61,7 +61,7 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 - (awekas) missing values no longer abort the update of all following states
 - (awekas) states structured in channels `info`, `current`, `day`, `forecast.dayN`, `station` with proper roles
 - (awekas) new: station data from station.php (once a day), value lists for condition and pressure tendency, Polish language
-- (awekas) requires js-controller >= 5.0.19, admin >= 6.17.14, Node.js >= 18
+- (awekas) requires js-controller >= 5.0.19, admin >= 6.17.14, Node.js >= 20
 
 ### 0.0.4 (2.9.2023)
 
