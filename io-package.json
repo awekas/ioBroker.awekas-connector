@@ -18,23 +18,18 @@
       },
       "0.1.0": {
         "en": "Complete rework: adapter starts correctly, encrypted API key, configurable interval, load protection for the AWEKAS API, structured states",
-        "de": "Komplette Überarbeitung: Adapter startet korrekt, verschlüsselter API-Key, einstellbares Intervall, Lastschutz für die AWEKAS-API, strukturierte Datenpunkte"
-      },
-      "0.0.4": {
-        "en": "initial release",
-        "de": "Erstveröffentlichung",
-        "ru": "Начальная версия",
-        "pt": "lançamento inicial",
-        "nl": "Eerste uitgave",
-        "fr": "Première version",
-        "it": "Versione iniziale",
-        "es": "Versión inicial",
-        "pl": "Pierwsze wydanie",
-        "uk": "Початкова версія",
-        "zh-cn": "首次出版"
+        "de": "Komplette Überarbeitung: Adapter startet korrekt, verschlüsselter API-Key, einstellbares Intervall, Lastschutz für die AWEKAS-API, strukturierte Datenpunkte",
+        "ru": "Полная переработка: адаптер корректно запускается, зашифрованный API-ключ, настраиваемый интервал, защита API AWEKAS от перегрузки, структурированные состояния",
+        "pt": "Reformulação completa: o adaptador inicia corretamente, chave API encriptada, intervalo configurável, proteção de carga da API AWEKAS, estados estruturados",
+        "nl": "Volledig herzien: adapter start correct, versleutelde API-sleutel, instelbaar interval, belastingsbescherming voor de AWEKAS-API, gestructureerde states",
+        "fr": "Refonte complète : l'adaptateur démarre correctement, clé API chiffrée, intervalle configurable, protection de charge de l'API AWEKAS, états structurés",
+        "it": "Revisione completa: l'adattatore si avvia correttamente, chiave API crittografata, intervallo configurabile, protezione del carico per l'API AWEKAS, stati strutturati",
+        "es": "Revisión completa: el adaptador se inicia correctamente, clave API cifrada, intervalo configurable, protección de carga para la API de AWEKAS, estados estructurados",
+        "pl": "Całkowita przebudowa: adapter uruchamia się poprawnie, zaszyfrowany klucz API, konfigurowalny interwał, ochrona API AWEKAS przed przeciążeniem, uporządkowane stany",
+        "uk": "Повна переробка: адаптер коректно запускається, зашифрований API-ключ, налаштовуваний інтервал, захист API AWEKAS від перевантаження, структуровані стани",
+        "zh-cn": "全面重构：适配器可正确启动，API 密钥加密存储，可配置间隔，AWEKAS API 负载保护，结构化状态"
       }
     },
-    "title": "AWEKAS weather connector",
     "titleLang": {
       "en": "AWEKAS weather connector",
       "de": "AWEKAS Wetterdaten-Connector",
@@ -71,7 +66,6 @@
       "weather station"
     ],
     "platform": "Javascript/Node.js",
-    "main": "main.js",
     "icon": "awekas-weather-connector.png",
     "enabled": true,
     "extIcon": "https://raw.githubusercontent.com/awekas/ioBroker.awekas-connector/main/admin/awekas-weather-connector.png",

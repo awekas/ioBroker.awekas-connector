@@ -9,6 +9,7 @@
   "homepage": "https://github.com/awekas/ioBroker.awekas-connector",
   "license": "MIT",
   "keywords": [
+    "ioBroker",
     "awekas",
     "weather",
     "weather data",
