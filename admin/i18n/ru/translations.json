@@ -1,9 +1,9 @@
 {
-  "apiKey": "AWEKAS API key",
-  "keyHelp": "You can find the API key at https://my.awekas.at (AWEKAS Plus required). It is stored encrypted.",
-  "interval": "Request interval (seconds)",
-  "intervalHelp": "At least 60 seconds",
-  "language": "Language",
-  "languageHelp": "Language for forecast text and wind direction",
-  "languageSystem": "System language"
+  "apiKey": "API-ключ AWEKAS",
+  "keyHelp": "API-ключ можно найти на https://my.awekas.at (требуется AWEKAS Plus). Он хранится в зашифрованном виде.",
+  "interval": "Интервал запроса (секунды)",
+  "intervalHelp": "Не менее 60 секунд",
+  "language": "Язык",
+  "languageHelp": "Язык текста прогноза и направления ветра",
+  "languageSystem": "Язык системы"
 }

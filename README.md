@@ -51,6 +51,15 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 
 ## Changelog
 
+<!--
+	Placeholder for the next version (at the beginning of the line):
+	### **WORK IN PROGRESS**
+-->
+### **WORK IN PROGRESS**
+
+- (awekas) translations of the settings page for Portuguese, Russian, Ukrainian and Chinese
+- (awekas) releases are now published via npm trusted publishing (no npm token)
+
 ### 0.1.0 (2026-11-22)
 
 - (awekas) complete rework: the adapter now starts correctly (adapter name matched io-package.json)
@@ -68,10 +77,6 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 - change adapter name
 - changed to async object write
 - changed main structure
-
-### **WORK IN PROGRESS**
-
-- (awekas) initial release
 
 ## License
 
