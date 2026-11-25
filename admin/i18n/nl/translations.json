@@ -1,9 +1,16 @@
 {
   "apiKey": "AWEKAS API-sleutel",
-  "keyHelp": "De API-sleutel vindt u op https://my.awekas.at (AWEKAS Plus vereist). Hij wordt versleuteld opgeslagen.",
+  "keyHelp": "De API-sleutel vindt u op https://my.awekas.at. Hij wordt versleuteld opgeslagen.",
   "interval": "Opvraaginterval (seconden)",
   "intervalHelp": "Minimaal 60 seconden",
   "language": "Taal",
   "languageHelp": "Taal voor voorspellingstekst en windrichting",
-  "languageSystem": "Systeemtaal"
+  "languageSystem": "Systeemtaal",
+  "languageDe": "Duits",
+  "languageEn": "Engels",
+  "languageEs": "Spaans",
+  "languageIt": "Italiaans",
+  "languageFr": "Frans",
+  "languageNl": "Nederlands",
+  "languagePl": "Pools"
 }

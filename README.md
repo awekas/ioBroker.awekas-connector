@@ -17,7 +17,8 @@ It reads the data of your own weather station from the AWEKAS Stations API.
 ### Requirements
 
 - ioBroker js-controller 6.0.11 or newer, Admin 7.6.20 or newer, Node.js 22 or newer (automated tests run on 22, 24 and 26)
-- a weather station registered at AWEKAS with active **AWEKAS Plus** (required for the Stations API)
+- a weather station registered at AWEKAS - the Stations API is available free of charge for every registered station
+- optional: an **AWEKAS Stationsweb** subscription (paid) - only needed for the forecast values; all other values work without it
 
 ### Configuration
 
@@ -34,8 +35,8 @@ It reads the data of your own weather station from the AWEKAS Stations API.
 | `info` | `connection` (API reachable), `error` (last API error), `fetchdate` |
 | `current` | current measurements (temperature, humidity, pressure, wind, rain, solar, extra sensors, air quality, ...) |
 | `day` | daily minimum/maximum values and their timestamps |
-| `forecast.day0` … `forecast.day5` | forecast for today and the next five days (only with active AWEKAS Stationsweb subscription) |
-| `station` | station data (location, position, hardware, software, AWEKAS Plus / Stationsweb status), refreshed once a day |
+| `forecast.day0` … `forecast.day5` | forecast for today and the next five days (only with an active, paid AWEKAS Stationsweb subscription) |
+| `station` | station data (location, position, hardware, software, Stationsweb status), refreshed once a day |
 
 Values that your station does not measure stay empty (`null`). Timestamps are stored in milliseconds (role `value.time`).
 
@@ -47,7 +48,7 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 - random start delay and ±10 % jitter so that many installations do not query at the same moment
 - on connection or server errors the interval is increased step by step (5, 10, 20, 40, max. 60 min)
 - if the quota is exceeded the adapter waits 15 minutes; a `Retry-After` header is respected
-- with an invalid key or inactive AWEKAS Plus the adapter stops querying until the settings are changed
+- with an invalid key, or if AWEKAS reports that API access is not active, the adapter stops querying until the settings are changed
 
 ## Changelog
 
@@ -55,6 +56,16 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+
+- (awekas) object tree is created also before the adapter is configured; start-up errors are logged
+- (awekas) license holder and translations of the adapter title corrected
+- (awekas) more specific state roles: precipitation today and last hour, wind gust, particulate matter, rain sensor, station model, end of the Stationsweb subscription
+- (awekas) language names in the settings are translated, unused admin/words.js removed
+- (awekas) no state updates after the adapter has been stopped
+- (awekas) AWEKAS Plus has been discontinued and is no longer required: hint removed from README and settings, state `station.awekasplus` removed (kept if it has custom settings such as history)
+- (awekas) README states that only the forecast needs a paid AWEKAS Stationsweb subscription
+
 ### 0.2.1 (2026-11-25)
 
 - (awekas) requires admin >= 7.6.20

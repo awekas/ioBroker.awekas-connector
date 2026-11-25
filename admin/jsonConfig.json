@@ -38,31 +38,31 @@
           "value": ""
         },
         {
-          "label": "Deutsch",
+          "label": "languageDe",
           "value": "de"
         },
         {
-          "label": "English",
+          "label": "languageEn",
           "value": "en"
         },
         {
-          "label": "Español",
+          "label": "languageEs",
           "value": "es"
         },
         {
-          "label": "Italiano",
+          "label": "languageIt",
           "value": "it"
         },
         {
-          "label": "Français",
+          "label": "languageFr",
           "value": "fr"
         },
         {
-          "label": "Nederlands",
+          "label": "languageNl",
           "value": "nl"
         },
         {
-          "label": "Polski",
+          "label": "languagePl",
           "value": "pl"
         }
       ],

@@ -7,14 +7,14 @@
  *
  *  Reads live weather data and a forecast of the user's own AWEKAS weather station
  *  through the AWEKAS Stations API V2.1 (current.php every interval, station.php once a day).
- *  The AWEKAS API key can be found at https://my.awekas.at (requires AWEKAS Plus).
+ *  The AWEKAS API key can be found at https://my.awekas.at.
  *
  *  Protection of the AWEKAS servers:
  *   - one request at a time, never overlapping (setTimeout chain, no setInterval)
  *   - enforced minimum interval, random start delay and jitter so that installations
  *     do not hit the API at the same second
  *   - exponential back-off on network/server errors, Retry-After is honoured
- *   - polling stops completely on permanent errors (invalid key, AWEKAS Plus not active)
+ *   - polling stops completely on permanent errors (invalid key, API access not active)
  *     until the configuration is changed (which restarts the instance)
  *   - fixed HTTPS endpoint, no redirects, request timeout, response size limit
  *   - identifying User-Agent so AWEKAS can see which client generates traffic
@@ -66,9 +66,11 @@ const WIND_TEXT = {
 /** errors after which polling is stopped until the configuration changes */
 const PERMANENT_ERRORS = {
     'invalid key': 'Invalid AWEKAS API key - please copy the correct key from https://my.awekas.at',
-    'awekas plus not active':
-        'AWEKAS Plus is not active - AWEKAS Plus is required for the Stations API. Please activate it in your AWEKAS user profile.',
+    'awekas plus not active': 'AWEKAS reports that API access is not active for this station. Please contact AWEKAS.',
 };
+
+/** states of older versions that are no longer delivered (AWEKAS Plus has been discontinued) */
+const OBSOLETE_STATES = ['station.awekasplus'];
 
 class AwekasConnector extends utils.Adapter {
     /**
@@ -95,7 +97,15 @@ class AwekasConnector extends utils.Adapter {
     }
 
     async onReady() {
-        await this.setState('info.connection', false, true);
+        try {
+            await this.setState('info.connection', false, true);
+            // create the object tree also when the adapter is not configured yet
+            await this.createObjects();
+            await this.removeObsoleteObjects();
+        } catch (e) {
+            this.log.error(`Could not create objects: ${e}`);
+            return;
+        }
 
         let token = typeof this.config.token === 'string' ? this.config.token.trim() : '';
         // the key is base64; accept it also when it was copied URL-encoded (%2B, %2F, %3D)
@@ -125,8 +135,6 @@ class AwekasConnector extends utils.Adapter {
         this.intervalMs = Math.min(interval, MAX_INTERVAL_S) * 1000;
 
         this.apiLanguage = await this.detectLanguage();
-
-        await this.createObjects();
 
         // random start delay (5 s up to one interval) spreads restarts of many installations
         const startDelay = 5000 + Math.floor(Math.random() * Math.max(0, this.intervalMs - 5000));
@@ -192,6 +200,34 @@ class AwekasConnector extends utils.Adapter {
     }
 
     /**
+     * Removes states of older versions. States with custom settings (e.g. history)
+     * are kept, so that the user does not lose this configuration.
+     */
+    async removeObsoleteObjects() {
+        for (const id of OBSOLETE_STATES) {
+            try {
+                const obj = await this.getObjectAsync(id);
+                if (!obj) {
+                    continue;
+                }
+                const custom = /** @type {Record<string, any> | undefined} */ (
+                    /** @type {any} */ (obj.common || {}).custom
+                );
+                if (custom && Object.keys(custom).length) {
+                    this.log.info(
+                        `State ${id} is no longer used. It is kept because it has custom settings (e.g. history), delete it manually if not needed.`,
+                    );
+                    continue;
+                }
+                await this.delObjectAsync(id);
+                this.log.debug(`Removed obsolete state ${id}`);
+            } catch (e) {
+                this.log.warn(`Could not remove obsolete state ${id}: ${e}`);
+            }
+        }
+    }
+
+    /**
      * Schedule the next request. Only one timer exists at any time.
      *
      * @param {number} delayMs
@@ -218,6 +254,9 @@ class AwekasConnector extends utils.Adapter {
         let nextDelay = this.withJitter(this.intervalMs);
         try {
             const data = await this.fetchData();
+            if (this.stopped) {
+                return; // adapter is shutting down
+            }
             const apiError = typeof data.error === 'string' ? data.error.trim() : data.error ? String(data.error) : '';
 
             if (apiError) {

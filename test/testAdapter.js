@@ -51,7 +51,8 @@ class FakeAdapter extends EventEmitter {
 		super();
 		this.name = options.name;
 		this.config = FakeAdapter.config;
-		this.objects = {};
+		this.objects = { ...FakeAdapter.presetObjects };
+		this.deleted = [];
 		this.states = {};
 		this.logs = [];
 		this.timers = [];
@@ -65,6 +66,13 @@ class FakeAdapter extends EventEmitter {
 		if (ack !== true) throw new Error("ack missing");
 		if (val === undefined) throw new Error(`undefined value for ${id}`);
 		this.states[id] = val;
+	}
+	async getObjectAsync(id) {
+		return this.objects[id] || null;
+	}
+	async delObjectAsync(id) {
+		delete this.objects[id];
+		this.deleted.push(id);
 	}
 	async getForeignObjectAsync() {
 		return { common: { language: "de" } };
@@ -83,9 +91,11 @@ class FakeAdapter extends EventEmitter {
 /**
  * @param {Record<string, any>} config
  * @param {(url: string) => any} responder
+ * @param {Record<string, any>} [presetObjects] objects that exist before the start
  */
-async function startAdapter(config, responder) {
+async function startAdapter(config, responder, presetObjects = {}) {
 	FakeAdapter.config = config;
+	FakeAdapter.presetObjects = presetObjects;
 	const requests = [];
 	global.fetch = async (url, opts) => {
 		requests.push({ url, opts });
@@ -151,7 +161,8 @@ describe("AWEKAS connector", () => {
 		expect(s["forecast.day0.icon"]).to.equal(338);
 		expect(s["forecast.day0.text"]).to.equal("starker Schneefall");
 		expect(s["station.location"]).to.equal("Micheldorf Test");
-		expect(s["station.awekasplus"]).to.equal(true);
+		expect(s["station.id"]).to.equal(5);
+		expect(s).to.not.have.property("station.awekasplus");
 		for (const [id, val] of Object.entries(s)) {
 			if (val === null || !adapter.objects[id]) continue;
 			expect(typeof val, id).to.equal(adapter.objects[id].common.type);
@@ -200,13 +211,24 @@ describe("AWEKAS connector", () => {
 		expect(adapter.states["info.connection"]).to.equal(false);
 	});
 
-	it("stops polling if AWEKAS Plus is not active", async () => {
+	it("stops polling if AWEKAS reports that API access is not active", async () => {
 		const { adapter } = await startAdapter({ token: KEY }, () => ({
 			status: 200,
 			body: { error: "AWEKAS plus not active" },
 		}));
 		await tick(adapter);
 		expect(adapter.timers).to.have.length(0);
+	});
+
+	it("removes the obsolete state station.awekasplus, but keeps it if it has custom settings", async () => {
+		const plain = { type: "state", common: { name: "AWEKAS Plus active" } };
+		const first = await startAdapter({ token: KEY }, ok, { "station.awekasplus": plain });
+		expect(first.adapter.deleted).to.deep.equal(["station.awekasplus"]);
+		expect(first.adapter.objects).to.not.have.property("station.awekasplus");
+		const custom = { type: "state", common: { name: "AWEKAS Plus active", custom: { "history.0": { enabled: true } } } };
+		const second = await startAdapter({ token: KEY }, ok, { "station.awekasplus": custom });
+		expect(second.adapter.deleted).to.have.length(0);
+		expect(second.adapter.objects).to.have.property("station.awekasplus");
 	});
 
 	it("waits 15 minutes when the quota is exceeded", async () => {

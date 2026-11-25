@@ -10,7 +10,6 @@
 		"**/build",
 		"node_modules/",
 		"widgets/",
-		"admin/words.js",
 		"test/**"
 	]
 }

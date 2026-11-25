@@ -1,9 +1,16 @@
 {
   "apiKey": "Clave API de AWEKAS",
-  "keyHelp": "Encontrará la clave API en https://my.awekas.at (se requiere AWEKAS Plus). Se guarda cifrada.",
+  "keyHelp": "Encontrará la clave API en https://my.awekas.at. Se guarda cifrada.",
   "interval": "Intervalo de consulta (segundos)",
   "intervalHelp": "Al menos 60 segundos",
   "language": "Idioma",
   "languageHelp": "Idioma del texto de pronóstico y de la dirección del viento",
-  "languageSystem": "Idioma del sistema"
+  "languageSystem": "Idioma del sistema",
+  "languageDe": "Alemán",
+  "languageEn": "Inglés",
+  "languageEs": "Español",
+  "languageIt": "Italiano",
+  "languageFr": "Francés",
+  "languageNl": "Neerlandés",
+  "languagePl": "Polaco"
 }

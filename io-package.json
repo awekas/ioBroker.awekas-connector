@@ -59,14 +59,14 @@
     "titleLang": {
       "en": "AWEKAS weather connector",
       "de": "AWEKAS Wetterdaten-Connector",
-      "ru": "погодный разъем AWEKAS",
+      "ru": "Коннектор погоды AWEKAS",
       "pt": "Conector meteorológico AWEKAS",
       "nl": "AWEKAS weerconnector",
       "fr": "Connecteur météo AWEKAS",
       "it": "Connettore meteorologico AWEKAS",
       "es": "Conector meteorológico AWEKAS",
-      "pl": "Złącze pogodowe AWEKAS",
-      "uk": "Погодний роз'єм AWEKAS",
+      "pl": "Konektor pogodowy AWEKAS",
+      "uk": "Конектор погоди AWEKAS",
       "zh-cn": "AWEKAS 天气连接器"
     },
     "desc": {

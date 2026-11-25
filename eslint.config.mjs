@@ -6,7 +6,7 @@ export default [
     ...config,
     {
         // specify files to exclude from linting here
-        ignores: ['.dev-server/', '.vscode/', '*.test.js', 'test/**/*.js', '*.config.mjs', 'build', 'admin/build', 'admin/words.js', 'admin/admin.d.ts', '**/adapter-config.d.ts'],
+        ignores: ['.dev-server/', '.vscode/', '*.test.js', 'test/**/*.js', '*.config.mjs', 'build', 'admin/build', 'admin/admin.d.ts', '**/adapter-config.d.ts'],
     },
     {
         // you may disable some 'jsdoc' warnings - but using jsdoc is highly recommended
