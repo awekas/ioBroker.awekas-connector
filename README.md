@@ -58,6 +58,7 @@ The AWEKAS Stations API allows 240 requests per hour and 2 requests per second. 
 ### **WORK IN PROGRESS**
 
 - (awekas) requires admin >= 7.6.20
+- (awekas) state roles of forecast values and 24h precipitation aligned with the ioBroker role catalogue
 - (awekas) test dependencies are now provided by @iobroker/testing only
 
 ### 0.2.0 (2026-11-22)
