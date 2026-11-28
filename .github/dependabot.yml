@@ -19,6 +19,10 @@ updates:
       # chai, sinon-chai and chai-as-promised must stay compatible with @iobroker/testing
       - dependency-name: "*chai*"
         update-types: ["version-update:semver-major"]
+      # TypeScript 7 has no programmatic API yet; typescript-eslint (used by
+      # @iobroker/eslint-config) supports only typescript < 6.1 - revisit with TypeScript 7.1
+      - dependency-name: "typescript"
+        versions: [">= 7.0.0"]
 
   - package-ecosystem: github-actions
     directory: "/"
