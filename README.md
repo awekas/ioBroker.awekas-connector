@@ -5,7 +5,7 @@
 
 [![NPM](https://nodei.co/npm/iobroker.awekas-connector.png?downloads=true)](https://nodei.co/npm/iobroker.awekas-connector/)
 
-**Tests:** ![Test and Release](https://github.com/awekas/ioBroker.awekas-connector/workflows/Test%20and%20Release/badge.svg)
+**Tests:** [![Test and Release](https://github.com/awekas/ioBroker.awekas-connector/actions/workflows/test-and-release.yml/badge.svg?branch=main)](https://github.com/awekas/ioBroker.awekas-connector/actions/workflows/test-and-release.yml?query=branch%3Amain)
 
 ## awekas-connector adapter for ioBroker
 
